@@ -1,0 +1,213 @@
+---
+title: "DDS Project 1 Case Study"
+author: "Jack Kortokrax"
+date: "2022-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,warning=FALSE,message=FALSE}
+library(ggplot2)
+library(e1071)
+library(class)
+library(tm)
+library(tidyr)
+library(plyr)
+library(jsonlite)
+library(dplyr)
+library(tidyverse)
+library(e1071)
+library(mvtnorm)
+library(caret)
+library(mapproj)
+library(plotly)
+library(usmap)
+library(maps)
+library(scales)
+library(tidymodels)
+library(kknn)
+
+```
+#1.	How many breweries are present in each state?
+```{r, Q1}
+######Import Data#######
+Beer = read.csv(file.choose(),header = TRUE) 
+Breweries = read.csv(file.choose(),header = TRUE)
+
+######Count#######
+Count <- Breweries %>% group_by(State) %>% summarise(Brew_ID = n())
+Count
+
+######Plot of Count by State#######
+Breweries %>% ggplot(aes(x = State, fill=State)) + geom_bar() + ggtitle("Count of Breweries in each State") + ylab("Number of Breweries") + geom_text(aes(label = ..count..), stat = "count", vjust=-.2, colour = "black") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+#2.	Merge beer data with the breweries data. Print the first 6 observations and the last six observations to check the merged file.  (RMD only, this does not need to be included in the presentation or the deck.)
+```{r, Q2}
+######Merge Data#######
+Beer <- Beer %>% rename(Brew_ID = Brewery_id)
+Beer <- Beer %>% rename(Beer_Name = Name)
+Breweries <- Breweries %>% rename(Brewery_Name = Name)
+Brewery_Beer <- merge(Beer,Breweries, by = "Brew_ID")
+
+######Print Head and Tail#######
+head(Brewery_Beer,6)
+tail(Brewery_Beer,6)
+```
+
+#3.	Address the missing values in each column.
+```{r, Q3}
+colSums(is.na(Brewery_Beer))
+nrow(Brewery_Beer)
+
+BB_NoNA = na.omit(Brewery_Beer)
+colSums(is.na(BB_NoNA))
+nrow(BB_NoNA)
+```
+
+#4.	Compute the median alcohol content and international bitterness unit for each state. Plot a bar chart to compare.
+```{r, Q4}
+##########Median ABV and IBU for each State#############
+ST_ABV <- aggregate(x= BB_NoNA$ABV, by = list(BB_NoNA$State),FUN = median)
+ST_IBU <- aggregate(x= BB_NoNA$IBU, by = list(BB_NoNA$State),FUN = median)
+ST_ABV <- ST_ABV %>% rename(Med_ABV = x,State = Group.1)
+ST_IBU <- ST_IBU %>% rename(Med_IBU = x,State = Group.1)
+######Turn ABV into a %#######
+ST_ABV$Med_ABV_Rounded <- round(ST_ABV$Med_ABV ,digit=4)
+ST_ABV$Med_ABVPCT <- percent(ST_ABV$Med_ABV_Rounded, accuracy = .01)
+######Round INB for Scaling######
+ST_IBU$Med_IBU_Rounded <- round(ST_IBU$Med_IBU ,digit=2)
+######Plot ABV######
+ST_ABV$State <- fct_reorder(ST_ABV$State, ST_ABV$Med_ABV)
+ST_ABV %>% ggplot(aes(x = State, y=Med_ABVPCT, fill=State)) + geom_bar(stat="identity") + ggtitle("Med_ABV by State") + ylab("Med_ABV") + geom_text(aes(label = Med_ABVPCT), vjust=0, size= 2, colour = "black")
+
+######Plot IBU######
+ST_IBU$State <- fct_reorder(ST_IBU$State, ST_IBU$Med_IBU)
+ST_IBU %>% ggplot(aes(x = State, y=Med_IBU_Rounded, fill=State)) + geom_bar(stat="identity") + ggtitle("Med_IBU by State") + ylab("Med_IBU") + geom_text(aes(label = Med_IBU_Rounded), vjust=0, size=2, colour = "black")
+
+######Merge for a cross report######
+ST_IBU_ABV <- merge(ST_IBU,ST_ABV, by = "State")
+ST_IBU_ABV %>% ggplot(aes(x = Med_ABVPCT, y = Med_IBU_Rounded, color = State)) + geom_jitter() + ggtitle("Med_IBU and Mean_ABV") + xlab("Med_ABV") + ylab("Med_IBU")
+######Create Bins for reporting######
+ABVPCTFact = cut(ST_IBU_ABV$Med_ABV, breaks = c(.01,.05,.06,.07), labels = c("Low","Medium","High"))
+######Plot the cross report######
+ST_IBU_ABV %>%  mutate(ABVPCTFact = ABVPCTFact) %>%  ggplot(aes(x = Med_ABVPCT, y = Med_IBU_Rounded, color = ABVPCTFact)) + geom_jitter() + ggtitle("Med_IBU and Med_ABV") + xlab("Med_ABV") + ylab("Med_IBU")
+```
+
+#5.	Which state has the maximum alcoholic (ABV) beer? Which state has the most bitter (IBU) beer?
+```{r, Q5}
+Brewery_Beer %>% slice_max(ABV)
+Brewery_Beer %>% slice_min(ABV)
+```
+
+#6.	Comment on the summary statistics and distribution of the ABV variable.
+```{r, Q6}
+summary(BB_NoNA)
+hist(BB_NoNA$ABV)
+
+ABVLevel = cut(BB_NoNA$ABV, breaks = c(.00,.049,.089,.13), labels = c("Low","Medium","High"))
+BB_NoNA %>% mutate(ABVLevel= ABVLevel) %>% ggplot(aes(x = ABV, y= IBU, fill=ABVLevel)) + geom_histogram(stat="identity") + ggtitle("Distribution by ABV Level")
+```
+
+#7.	Is there an apparent relationship between the bitterness of the beer and its alcoholic content? Draw a scatter plot.  Make your best judgment of a relationship and EXPLAIN your answer.
+```{r, Q7}
+BB_NoNA$ABV_Rounded <- round(BB_NoNA$ABV ,digit=3)
+
+BB_NoNA %>% mutate(ABVLevel= ABVLevel) %>%  ggplot(aes(x = IBU, y = ABV, color = ABVLevel)) + geom_jitter() + ggtitle("ABV vs. IBU by Levels") + xlab("International Bitterness Unit") + ylab("Alcohol By Volume")
+```
+
+#8.	Budweiser would also like to investigate the difference with respect to IBU and ABV between IPAs (India Pale Ales) and other types of Ale (any beer with “Ale” in its name other than IPA).  You decide to use KNN classification to investigate this relationship.  Provide statistical evidence one way or the other. You can of course assume your audience is comfortable with percentages … KNN is very easy to understand conceptually. In addition, while you have decided to use KNN to investigate this relationship (KNN is required) you may also feel free to supplement your response to this question with any other methods or techniques you have learned.  Creativity and alternative solutions are always encouraged.  
+
+```{r}
+## First, we set NA for blank values as a catch-all so that when we retrieve IPA and Ale's we do not run across the error of pulling null values.
+Brewery_Beer$Class1 <- NA
+for(i in 1:nrow(Brewery_Beer)){
+  if(grepl("IPA",Brewery_Beer$Style[i]) == TRUE | grepl("India Pale Ale", Brewery_Beer$Style[i]) == TRUE){
+    Brewery_Beer$Class1[i] <- "IPA"
+  } else if(grepl("Ale", Brewery_Beer$Style[i]) == TRUE & !grepl("India Pale Ale", Brewery_Beer$Style[i]) == TRUE & !grepl("IPA", Brewery_Beer$Style[i]) == TRUE){
+    Brewery_Beer$Class1[i] <- "Ale"
+  } else{
+    Brewery_Beer$Class1[i] <- NA
+  }
+}
+```
+
+
+
+```{r}
+#In this section, we run our KNN test with a randomly selected seed and the original data set with Null values for ABV and IBU still included. We decided to use the original set with null values as that contained a greater set of names than the removed NAs data set.
+set.seed(200)
+Brewery_BeerKnn <- na.omit(Brewery_Beer)
+splitPerc <- 0.80
+trainIndices <- sample(1:dim(Brewery_BeerKnn)[1], round(splitPerc * dim(Brewery_BeerKnn)[1]))
+train <- Brewery_BeerKnn[trainIndices,]
+test <- Brewery_BeerKnn[-trainIndices,]
+train$ABV <- scale(train$ABV)
+train$IBU <- scale(train$IBU)
+test$ABV <- scale(test$ABV)
+test$IBU <- scale(test$IBU)
+accuracy <- c()
+k <- c()
+for(i in 1:90){
+  classifications <- knn(train[, c(4, 5)], test[, c(4, 5)], as.factor(train$Class1), prob = TRUE, k = i)
+  CM <- confusionMatrix(table(classifications, as.factor(test$Class1)))
+  accuracy[i] <- CM$overall[1]
+  k[i] <- i
+  if(i == 1){
+    max_k <- i
+    accuracy_max <- accuracy[i]
+  }else if(accuracy[i] >= accuracy_max){
+    max_k <- i
+    accuracy_max <- accuracy[i]
+  }
+}
+plot(k, accuracy, type = "l", xlab = "k")
+print(paste0("Max k:", max_k))
+print(paste0("Max accuracy:", accuracy[max_k]))
+```
+
+```{r}
+classifications <- knn(train[, c(4, 5)], test[, c(4, 5)], train$Class1, prob = TRUE, k = max_k)
+  CM <- confusionMatrix(table(classifications, test$Class1))
+  print(CM)
+```
+
+
+```{r}
+library(plotly)
+x_test <- test %>% select("ABV", "IBU")
+y_test <- test %>% select("Class1")
+yscore <- knn(train[, c(4, 5)], test[, c(4, 5)], train$Class1, prob = TRUE, k = max_k)
+yscore <- attributes(yscore)$prob
+
+pdb <- cbind(x_test, y_test)
+pdb <- cbind(pdb, yscore)
+
+fig <- plot_ly(data = pdb,x = ~IBU, y = ~ABV, type = 'scatter', mode = 'markers',color = ~yscore, colors = 'RdBu', symbol = ~Class1, split = ~Class1, symbols = c('square-dot','circle-dot'), marker = list(size = 12, line = list(color = 'black', width = 1)))
+fig
+```
+
+```{r}
+ggplot(train,aes(x=IBU,y=ABV,colour=Class1))+geom_point(size=0.3)+geom_density2d()
+```
+```{r}
+ggplot(train,aes(x=IBU,y=ABV,colour=Class1)) + geom_jitter() +geom_density2d() + ggtitle("Density Plot of ABV vs IBU")
+```
+
+9.	Knock their socks off!  Find one other useful inference from the data that you feel Budweiser may be able to find value in.  You must convince them why it is important and back up your conviction with appropriate statistical evidence. 
+```{r}
+fit.IBU <- aov(IBU~Style, data = Brewery_Beer)
+print("ANOVA IBU")
+summary(fit.IBU)
+fit.ABV <- aov(ABV~Style, data = Brewery_Beer)
+print("ANOVA ABV")
+summary(fit.ABV)
+#There is significant evidence to prove that at least one Style has a different IBU, and one style has a different ABV (p-value < 2e-16).As a result, one can infer that different styles are characterized by different combinations of bitterness and alcohol level.
+```
+
+```{r}
+Brewery_Beer %>% ggplot(aes(x = IBU, y = ABV, color = Style)) + geom_point() + theme(legend.position = "None") + ggtitle("ABV vs IBU by Style")
+```
